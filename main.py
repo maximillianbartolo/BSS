@@ -8,6 +8,7 @@ import math
 
 # Initialize Pygame
 pygame.init()
+game_over = False
 
 # Set up the game window
 WINDOW_WIDTH = 1620
@@ -61,11 +62,7 @@ class SoundManager:
         self.sfx_volume = 0.7
 
     def load_sound(self, name, filepath):
-        """
-        Load a sound effect
-        :param name: Identifier for the sound
-        :param filepath: Path to the sound file
-        """
+
         try:
             sound = pygame.mixer.Sound(filepath)
             self.sounds[name] = sound
@@ -74,20 +71,12 @@ class SoundManager:
 
 
     def play_sound(self, name, loops=0):
-        """
-        Play a sound effect
-        :param name: Name of the sound to play
-        :param loops: Number of times to repeat (-1 for infinite)
-        """
         if name in self.sounds:
             self.sounds[name].set_volume(self.sfx_volume)
             self.sounds[name].play(loops)
 
     def set_sfx_volume(self, volume):
-        """
-        Set sound effects volume
-        :param volume: Volume level (0.0 to 1.0)
-        """
+
         self.sfx_volume = max(0.0, min(1.0, volume))
         for sound in self.sounds.values():
             sound.set_volume(self.sfx_volume)
@@ -200,28 +189,54 @@ class Ship:
 
         # Low Earth Orbit (LEO) parameters
         EARTH_RADIUS = 6371e3  # meters
-        LEO_ALTITUDE = 400e3  # 400 km above Earth's surface
+        LEO_ALTITUDE = 40000e3  # 400 km above Earth's surface
         orbit_radius = EARTH_RADIUS + LEO_ALTITUDE
 
         # Calculate orbital velocity for circular orbit
-        orbital_velocity = math.sqrt(G * EARTH.mass / orbit_radius)
+        # v = sqrt(G * M / r)
+        # Increase the velocity multiplier to make the orbit faster
+        velocity_multiplier = 1.5  # Adjust this value to change orbital speed
+        orbital_velocity = velocity_multiplier * math.sqrt(G * EARTH.mass / orbit_radius)
 
-        # Initial position and velocity
+        # Initial position: circular orbit in the x-y plane
+        # Start at an angle of 45 degrees from x-axis
+        orbit_angle = math.pi / 4  # 45 degrees
+
+        # Position calculation
         self.position = [
-            (orbit_radius / WORLD_SCALE) * math.cos(math.pi / 4),
-            (orbit_radius / WORLD_SCALE) * math.sin(math.pi / 4)
+            (orbit_radius / WORLD_SCALE) * math.cos(orbit_angle),
+            (orbit_radius / WORLD_SCALE) * math.sin(orbit_angle)
         ]
 
+        # Velocity calculation for circular orbit
+        # Velocity is perpendicular to the position vector
+        # Ensure tangential velocity for circular orbit
         self.velocity = [
-            -orbital_velocity * math.sin(math.pi / 4) / WORLD_SCALE,
-            -orbital_velocity * math.cos(math.pi / 4) / WORLD_SCALE
+            -orbital_velocity * math.sin(orbit_angle) / WORLD_SCALE,
+            orbital_velocity * math.cos(orbit_angle) / WORLD_SCALE
         ]
 
         # Movement properties
-        self.angle = 45
+        self.angle = math.degrees(orbit_angle)
         self.main_thrust = 0.1
         self.rcs_thrust = 0.05
         self.mass = 1000  # kg
+
+    def check_planet_collision(self):
+        for body in celestial_bodies:
+            # Convert object's position to world coordinates
+            obj_x = self.position[0] * WORLD_SCALE
+            obj_y = self.position[1] * WORLD_SCALE
+
+            # Calculate distance between object and body center
+            dx = body.x - obj_x
+            dy = body.y - obj_y
+            distance = math.sqrt(dx * dx + dy * dy)
+
+            # Check if distance is less than the body's radius
+            if distance < body.radius:
+                return body
+        return None
 
     def toggle_nixon_mode(self):
         # Toggle between base image and Nixon image
@@ -283,6 +298,7 @@ class Ship:
 
         # Blit ship with precise positioning
         surface.blit(scaled_image, (blit_x, blit_y))
+
 
 def draw_minimap(surface, player_pos, zoom=0.01):
     # Create a small surface for the minimap
@@ -372,39 +388,54 @@ while running:
                 player_ship.toggle_nixon_mode()
                 sound_manager.play_sound('nixon mode')
 
-    # Handle continuous keyboard input
-    keys = pygame.key.get_pressed()
+            # Restart game if ship is destroyed and R is pressed
+            if game_over and event.key == pygame.K_r:
+                # Reset game state
+                player_ship = Ship()
+                game_over = False
+                CAMERA_ZOOM = 1.0
 
-    # Ship controls
-    if keys[pygame.K_LEFT]:
-        player_ship.rotate(-5)
-    if keys[pygame.K_RIGHT]:
-        player_ship.rotate(5)
-    if keys[pygame.K_UP]:
-        player_ship.move_forward()
+    # Only process game logic if not game over
+    if not game_over:
+        # Handle continuous keyboard input
+        keys = pygame.key.get_pressed()
 
-    # RCS controls
-    dx = 0
-    dy = 0
-    if keys[pygame.K_a]: dx = -1
-    if keys[pygame.K_d]: dx = 1
-    if keys[pygame.K_w]: dy = -1
-    if keys[pygame.K_s]: dy = 1
-    if dx != 0 or dy != 0:
-        player_ship.apply_rcs(dx, dy)
+        # Ship controls
+        if keys[pygame.K_LEFT]:
+            player_ship.rotate(-5)
+        if keys[pygame.K_RIGHT]:
+            player_ship.rotate(5)
+        if keys[pygame.K_UP]:
+            player_ship.move_forward()
 
-    # Zoom controls
-    zoom_speed = 0.2  # Adjust for desired zoom smoothness
-    if keys[pygame.K_EQUALS] or keys[pygame.K_PLUS]:  # Zoom in
-        CAMERA_ZOOM *= 1 + zoom_speed
-    if keys[pygame.K_MINUS]:  # Zoom out
-        CAMERA_ZOOM /= 1 + zoom_speed
+        # RCS controls
+        dx = 0
+        dy = 0
+        if keys[pygame.K_a]: dx = -1
+        if keys[pygame.K_d]: dx = 1
+        if keys[pygame.K_w]: dy = -1
+        if keys[pygame.K_s]: dy = 1
+        if dx != 0 or dy != 0:
+            player_ship.apply_rcs(dx, dy)
 
-    # Optional: Add zoom limits
-    CAMERA_ZOOM = max(0.1, min(CAMERA_ZOOM, 10))  # Limit zoom between 0.1 and 10
+        # Zoom controls
+        zoom_speed = 0.2  # Adjust for desired zoom smoothness
+        if keys[pygame.K_EQUALS] or keys[pygame.K_PLUS]:  # Zoom in
+            CAMERA_ZOOM *= 1 + zoom_speed
+        if keys[pygame.K_MINUS]:  # Zoom out
+            CAMERA_ZOOM /= 1 + zoom_speed
 
-    # Update ship
-    player_ship.update()
+        # Optional: Add zoom limits
+        CAMERA_ZOOM = max(0.1, min(CAMERA_ZOOM, 10))  # Limit zoom between 0.1 and 10
+
+        # Update ship
+        player_ship.update()
+
+        # Check for planet collision
+        collided_body = player_ship.check_planet_collision()
+        if collided_body:
+            game_over = True
+            print(f"Ship crashed into {collided_body.color} planet!")
 
     # Clear the window
     window.fill((0, 0, 0))
@@ -432,6 +463,18 @@ while running:
     speed = math.sqrt(player_ship.velocity[0] ** 2 + player_ship.velocity[1] ** 2) * WORLD_SCALE / 1000
     speed_text = font.render(f"Speed: {speed:.1f} km/s Zoom: {CAMERA_ZOOM:.2f}", True, (255, 255, 255))
     window.blit(speed_text, (10, 10))
+
+    # Draw game over text if game is over
+    if game_over:
+        game_over_font = pygame.font.Font(None, 74)
+        game_over_text = game_over_font.render("GAME OVER", True, (255, 0, 0))
+        game_over_rect = game_over_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+        window.blit(game_over_text, game_over_rect)
+
+        restart_font = pygame.font.Font(None, 36)
+        restart_text = restart_font.render("Press R to Restart", True, (255, 255, 255))
+        restart_rect = restart_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2 + 100))
+        window.blit(restart_text, restart_rect)
 
     # Update the display
     pygame.display.flip()
